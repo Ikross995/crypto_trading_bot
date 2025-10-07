@@ -545,3 +545,9 @@ print("6. python cli.py --help")
 print("")
 
 print("⚠️ Продолжаю добавлять остальные модули...")
+# Logs
+*.log
+logs/
+work/logs/
+trading_bot.log
+
