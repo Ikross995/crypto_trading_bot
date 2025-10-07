@@ -1,0 +1,232 @@
+"""
+Constants and enums for AI Trading Bot.
+
+Defines all constants, enumerations, and magic values used throughout the system.
+"""
+
+from enum import Enum
+
+
+class TradingMode(str, Enum):
+    """Trading execution modes."""
+
+    LIVE = "live"
+    PAPER = "paper"
+    BACKTEST = "backtest"
+
+
+class OrderSide(str, Enum):
+    """Order side direction."""
+
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderType(str, Enum):
+    """Binance order types."""
+
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    STOP_MARKET = "STOP_MARKET"
+    STOP_LOSS = "STOP_LOSS"
+    TAKE_PROFIT = "TAKE_PROFIT"
+    TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET"
+
+
+class OrderStatus(str, Enum):
+    """Order execution status."""
+
+    NEW = "NEW"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELED = "CANCELED"
+    PENDING_CANCEL = "PENDING_CANCEL"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class PositionSide(str, Enum):
+    """Position side for hedge mode."""
+
+    BOTH = "BOTH"
+    LONG = "LONG"
+    SHORT = "SHORT"
+
+
+class WorkingType(str, Enum):
+    """Working type for stop orders."""
+
+    MARK_PRICE = "MARK_PRICE"
+    CONTRACT_PRICE = "CONTRACT_PRICE"
+
+
+class TimeInForce(str, Enum):
+    """Order time in force."""
+
+    GTC = "GTC"  # Good Till Canceled
+    IOC = "IOC"  # Immediate Or Cancel
+    FOK = "FOK"  # Fill Or Kill
+    GTX = "GTX"  # Good Till Cross (Post Only)
+
+
+class SignalDirection(str, Enum):
+    """Trading signal directions."""
+
+    BUY = "buy"
+    SELL = "sell"
+    WAIT = "wait"
+
+
+class Regime(str, Enum):
+    """Market regime types."""
+
+    TREND = "trend"
+    FLAT = "flat"
+    UNKNOWN = "unknown"
+
+
+class Timeframe(str, Enum):
+    """Timeframes for chart data."""
+
+    M1 = "1m"
+    M3 = "3m"
+    M5 = "5m"
+    M15 = "15m"
+    M30 = "30m"
+    H1 = "1h"
+    H2 = "2h"
+    H4 = "4h"
+    H6 = "6h"
+    H8 = "8h"
+    H12 = "12h"
+    D1 = "1d"
+    D3 = "3d"
+    W1 = "1w"
+    MN1 = "1M"
+
+
+class SIGNAL_STRENGTH:
+    """Signal strength thresholds."""
+
+    WEAK = 0.3
+    MEDIUM = 0.6  # Changed from MODERATE to match usage
+    STRONG = 0.8
+
+
+# Symbol validation constants
+VALID_SYMBOLS = {
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "ADAUSDT",
+    "DOTUSDT",
+    "XRPUSDT",
+    "LINKUSDT",
+    "LTCUSDT",
+    "BCHUSDT",
+    "XLMUSDT",
+    "EOSUSDT",
+    "TRXUSDT",
+    "ETCUSDT",
+    "FILUSDT",
+    "ATOMUSDT",
+    "MATICUSDT",
+    "AVAXUSDT",
+    "SOLUSDT",
+    "UNIUSDT",
+    "DOGEUSDT",
+}
+
+# Timeframe conversion to milliseconds
+TIMEFRAME_MS = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+}
+
+# Timeframe conversion to minutes
+TIMEFRAME_TO_MINUTES = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+    "2h": 120,
+    "4h": 240,
+    "6h": 360,
+    "8h": 480,
+    "12h": 720,
+    "1d": 1440,
+}
+
+# Exchange limits and defaults
+DEFAULT_TICK_SIZE = 0.01
+DEFAULT_LOT_SIZE = 0.001
+MAX_PAGINATION_LIMIT = 1500
+DEFAULT_RECV_WINDOW = 5000
+
+# Risk management limits
+MAX_POSITION_SIZE_USDT = 100_000
+MIN_ORDER_SIZE_USDT = 5.0
+MAX_LEVERAGE = 125
+
+# WebSocket configuration
+WS_PING_INTERVAL = 20
+WS_RECONNECT_DELAY = 2
+WS_MAX_RECONNECT_ATTEMPTS = 10
+
+# Funding rate boundaries (%)
+FUNDING_RATE_WARNING = 0.1
+FUNDING_RATE_CRITICAL = 0.3
+
+# Cache TTL (seconds)
+EXCHANGE_INFO_TTL = 300
+FUNDING_RATE_TTL = 3600
+TICKER_PRICE_TTL = 10
+
+# Indicator periods
+RSI_PERIOD = 14
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+BB_PERIOD = 20
+BB_STD = 2.0
+ADX_PERIOD = 14
+ATR_PERIOD = 14
+EMA_FAST = 20
+EMA_SLOW = 50
+SMA_SLOW = 200
+DONCHIAN_PERIOD = 20
+
+# Signal confidence thresholds
+MIN_SIGNAL_CONFIDENCE = 0.6
+STRONG_SIGNAL_CONFIDENCE = 0.8
+
+# Error codes and retry limits
+MAX_RETRIES = 3
+RETRY_DELAY = 1.0
+TIMESTAMP_ERROR_CODES = [-1021, -1022]
+RATE_LIMIT_ERROR_CODES = [-1003, -2015]
+INSUFFICIENT_BALANCE_CODES = [-2019, -1013]
+
+# File extensions
+KLINE_FILE_EXT = ".csv"
+STATE_FILE_EXT = ".json"
+LOG_FILE_EXT = ".log"
+
+# Logging levels
+LOG_LEVEL_DEBUG = "DEBUG"
+LOG_LEVEL_INFO = "INFO"
+LOG_LEVEL_WARNING = "WARNING"
+LOG_LEVEL_ERROR = "ERROR"
+LOG_LEVEL_CRITICAL = "CRITICAL"

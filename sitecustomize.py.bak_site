@@ -1,0 +1,17 @@
+# Auto-installed by install_site_sig_guard.py
+# This file is imported automatically by Python (via 'site') if present on sys.path.
+# It prevents NameError for legacy 'sig' usage across any module.
+
+import builtins
+
+# define only if not already defined to avoid side effects
+if not hasattr(builtins, "sig"):
+    builtins.sig = None
+if not hasattr(builtins, "trade_signal"):
+    builtins.trade_signal = None
+
+# optional: a tiny breadcrumb to stdout so we know it's active
+try:
+    print("\u2705 sitecustomize: global 'sig' guard active")
+except Exception:
+    pass

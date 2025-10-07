@@ -1,0 +1,54 @@
+# sitecustomize — IMBA unified live fixes
+import os, sys, builtins
+
+# 1) Глобальные гварды (на всякий случай)
+for _nm in ("sig","signal","trade_signal"):
+    if not hasattr(builtins, _nm):
+        setattr(builtins, _nm, None)
+
+# 2) Перехват --config и ранняя загрузка .env
+def _imba_grab_config(argv):
+    p = os.environ.get("IMBA_CONFIG_PATH", "")
+    if p: return p, argv
+    if "--config" in argv:
+        try:
+            i = argv.index("--config")
+            if i+1 < len(argv):
+                p = argv[i+1]
+                os.environ["IMBA_CONFIG_PATH"] = p
+                del argv[i:i+2]
+                print(f"✅ sitecustomize: IMBA_CONFIG_PATH={p}")
+        except Exception:
+            pass
+    return os.environ.get("IMBA_CONFIG_PATH",""), argv
+
+def _imba_load_env(path):
+    if not path: return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(path, override=True)
+        print(f"✅ sitecustomize: loaded .env from {path}")
+    except Exception as e:
+        print(f"⚠️ sitecustomize: dotenv load failed: {e}")
+
+_cfg, _argv = _imba_grab_config(sys.argv)
+_imba_load_env(_cfg)
+sys.argv = _argv
+
+# 3) validate_symbol stub (до compat)
+try:
+    import importlib, types
+    cu = importlib.import_module("core.utils")
+    if not hasattr(cu, "validate_symbol"):
+        def validate_symbol(sym: str) -> str:
+            try: s = str(sym).strip().upper()
+            except Exception: s = ""
+            return s
+        setattr(cu, "validate_symbol", validate_symbol)
+        print("✅ sitecustomize: core.utils.validate_symbol stub injected")
+    if not hasattr(cu, "normalize_symbol"):
+        def normalize_symbol(sym: str) -> str:
+            return cu.validate_symbol(sym)
+        setattr(cu, "normalize_symbol", normalize_symbol)
+except Exception as e:
+    print(f"⚠️ sitecustomize: validate_symbol stub failed: {e}")

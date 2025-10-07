@@ -1,0 +1,24 @@
+# core/env_overrides.py — centralized TESTNET/DRY_RUN overrides
+from __future__ import annotations
+import os
+
+def _truthy(v):
+    if v is None: return None
+    return str(v).strip().lower() in {"1","true","t","yes","y","on"}
+
+def apply(config):
+    # .env overrides
+    et = _truthy(os.getenv("TESTNET"))
+    ed = _truthy(os.getenv("DRY_RUN"))
+    if et is not None:
+        try: config.testnet = bool(et)
+        except Exception: pass
+    if ed is not None:
+        try: config.dry_run = bool(ed)
+        except Exception: pass
+    # Heuristic: путь .env.testnet => testnet True
+    cfg_path = os.getenv("IMBA_CONFIG_PATH","")
+    if isinstance(cfg_path, str) and cfg_path.lower().endswith(".env.testnet"):
+        try: config.testnet = True
+        except Exception: pass
+    return config

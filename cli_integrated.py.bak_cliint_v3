@@ -1,0 +1,96 @@
+# --- IMBA: apply env overrides for TESTNET/DRY_RUN (idempotent) ---
+def _imba_env_bool(name: str):
+    v = os.getenv(name, None)
+    if v is None: return None
+    return str(v).strip().lower() in {"1","true","t","yes","y","on"}
+
+def _imba_apply_env_overrides(cfg):
+    try:
+        et = _imba_env_bool("TESTNET")
+        ed = _imba_env_bool("DRY_RUN")
+        # если пользователь явно не передал флаг, уважаем .env
+        if et is not None:
+            cfg.testnet = bool(et)
+        if ed is not None:
+            cfg.dry_run = bool(ed)
+    except Exception:
+        pass
+
+#!/usr/bin/env python3
+# --- IMBA CLI shim: allow '--config PATH' after subcommand (idempotent) ---
+try:
+    import sys as _sys, os as _os
+    if "--config" in _sys.argv:
+        j = _sys.argv.index("--config")
+        if j+1 < len(_sys.argv):
+            _os.environ["IMBA_CONFIG_PATH"] = _sys.argv[j+1]
+            # удалить пару, чтобы Click/Typer не ругался
+            try:
+                del _sys.argv[j:j+2]
+            except Exception:
+                pass
+            print(f"✅ CLI shim: using config {_os.environ['IMBA_CONFIG_PATH']}")
+except Exception as _e:
+    pass
+# --- /IMBA CLI shim ---
+
+"""
+INTEGRATED AI Trading Bot CLI - User's Advanced System + Our Critical Fixes
+
+Combines user's sophisticated 30+ file modular architecture with critical fixes.
+"""
+
+import sys
+import logging
+
+# Apply compatibility patches FIRST
+try:
+    import compat
+    compat.apply()
+    print("✅ Applied advanced compat patches")
+except ImportError:
+    print("⚠️ Advanced compat system not found")
+
+# Import user's advanced CLI if available
+try:
+    from cli_updated import *
+    print("✅ Using user's advanced CLI system")
+except ImportError:
+    print("⚠️ Falling back to basic CLI")
+    import asyncio
+    import typer
+    from rich.console import Console
+    from core.config import get_config, load_config
+    from core.constants import TradingMode
+    
+    console = Console()
+    app = typer.Typer(name="integrated-trading-bot")
+    
+    @app.command()
+    def paper(
+        symbols: list[str] = None,
+        config: str = None,
+        verbose: bool = False
+    ):
+        """Paper trading with integrated fixes."""
+        if config:
+            print(f"Loading config: {config}")
+            from dotenv import load_dotenv
+            load_dotenv(config, override=True)
+        
+        from runner.paper import run_paper_trading
+        config = get_config()
+        config.mode = TradingMode.PAPER
+        
+        if symbols:
+            config.symbols = symbols
+            
+        console.print("[blue]Starting Integrated Paper Trading[/blue]")
+    try:
+        _imba_apply_env_overrides(config)
+    except Exception:
+        pass
+        asyncio.run(run_paper_trading(config))
+
+if __name__ == "__main__":
+    app()

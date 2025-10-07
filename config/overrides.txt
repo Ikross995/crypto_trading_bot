@@ -1,0 +1,143 @@
+:set TIMEFRAME 3m
+:set RISK_PER_TRADE_PCT 0.35
+:set MIN_ADX 12
+:set BT_CONF_MIN 0.85
+:set VWAP_BAND_PCT 0.006
+:set EMA_PINCH_Q 0.20
+:set OBI_THRESHOLD 0.22
+
+:set COOLDOWN_SEC 900          
+:set ANTI_FLIP_SEC 600        
+:set FUNDING_FILTER_THRESHOLD 0.10
+
+# Стопы/тейки — позже и реже двигаем, чтобы не выбивало “шумихой”
+:set SL_FIXED_PCT 1.6
+:set SL_ATR_MULT 2.0
+:set TRAIL_ENABLE false        
+:set TRAIL_ATR_MULT 1.6
+:set BE_TRIGGER_R 1.3
+
+# Многоступенчатое DCA (проценты к цене входа: смещение : мультипликатор добавки)
+:set ADAPTIVE_DCA true
+:set DCA_DISABLE_ON_TREND false
+:set DCA_LADDER -0.6:1.2,-1.4:1.6,-2.6:2.1,-4.0:3.0
+
+# Выходы на бирже – ставим реже, не дёргаем по тикам
+:set PLACE_EXITS_ON_EXCHANGE true
+:set EXITS_ENSURE_INTERVAL 35
+:set EXIT_REPLACE_COOLDOWN 90
+:set EXIT_REPLACE_EPS 0               
+:set EXIT_WORKING_TYPE CONTRACT_PRICE
+:set MIN_TP_NOTIONAL_USDT 7           
+
+# Тейк‑профиты – подальше, чтобы дать позиции раскрыться
+:set TP_LEVELS 0.8,1.8,3.2
+:set TP_SHARES 0.5,0.3,0.2
+
+
+
+Профиль 2 — Тренд‑следящий (умеренно агрессивный, с DCA только в мягких откатах)
+
+
+:set TIMEFRAME 3m
+:set RISK_PER_TRADE_PCT 0.40
+:set MIN_ADX 20
+:set BT_CONF_MIN 0.90
+:set VWAP_BAND_PCT 0.005
+:set EMA_PINCH_Q 0.15
+:set OBI_THRESHOLD 0.25
+
+:set COOLDOWN_SEC 600
+:set ANTI_FLIP_SEC 300
+
+:set SL_FIXED_PCT 1.3
+:set SL_ATR_MULT 1.8
+:set TRAIL_ENABLE true
+:set TRAIL_ATR_MULT 1.2
+:set BE_TRIGGER_R 1.1
+
+:set ADAPTIVE_DCA true
+:set DCA_DISABLE_ON_TREND true        
+:set DCA_LADDER -0.7:1.0,-1.6:1.3,-2.8:1.7
+
+:set PLACE_EXITS_ON_EXCHANGE true
+:set EXITS_ENSURE_INTERVAL 30
+:set EXIT_REPLACE_COOLDOWN 70
+:set EXIT_REPLACE_EPS 0
+:set EXIT_WORKING_TYPE CONTRACT_PRICE
+:set MIN_TP_NOTIONAL_USDT 7
+
+:set TP_LEVELS 0.7,1.5,2.6
+:set TP_SHARES 0.45,0.35,0.20
+
+
+
+Профиль 3 — Контртренд/Рейндж (DCA‑сетка, реже вход/выход)
+
+
+:set TIMEFRAME 5m
+:set RISK_PER_TRADE_PCT 0.30
+:set MIN_ADX 8
+:set BT_CONF_MIN 0.70
+:set VWAP_BAND_PCT 0.012
+:set EMA_PINCH_Q 0.25
+:set OBI_THRESHOLD 0.18
+
+:set COOLDOWN_SEC 1200
+:set ANTI_FLIP_SEC 900
+
+:set SL_FIXED_PCT 2.0
+:set SL_ATR_MULT 2.4
+:set TRAIL_ENABLE false
+:set BE_TRIGGER_R 1.6
+
+:set ADAPTIVE_DCA true
+:set DCA_DISABLE_ON_TREND false
+:set DCA_LADDER -0.7:1.0,-1.5:1.5,-2.8:2.0,-4.5:3.0
+
+:set PLACE_EXITS_ON_EXCHANGE true
+:set EXITS_ENSURE_INTERVAL 40
+:set EXIT_REPLACE_COOLDOWN 120
+:set EXIT_REPLACE_EPS 0
+:set EXIT_WORKING_TYPE CONTRACT_PRICE
+:set MIN_TP_NOTIONAL_USDT 8
+
+:set TP_LEVELS 0.6,1.1,1.9
+:set TP_SHARES 0.4,0.35,0.25
+
+Профиль 4 — Свинг‑DCA (держим позицию дольше)
+В формате :set (как у вас в примерах)
+
+:set RISK_PER_TRADE_PCT 0.45
+:set MIN_ADX 16
+:set BT_CONF_MIN 0.85
+:set BT_BBW_MIN 0.002
+:set VWAP_BAND_PCT 0.006
+:set EMA_PINCH_Q 0.12
+:set OBI_THRESHOLD 0.22
+
+:set COOLDOWN_SEC 420            
+:set ANTI_FLIP_SEC 240           
+:set STRICT_GUARDS true
+
+:set SL_FIXED_PCT 1.4
+:set SL_ATR_MULT 2.2
+:set TRAIL_ATR_MULT 1.4
+:set BE_TRIGGER_R 1.2
+
+:set TP_LEVELS 0.55,1.2,2.1     
+:set TP_SHARES 0.30,0.35,0.35    
+:set MIN_TP_NOTIONAL_USDT 5
+
+:set EXIT_WORKING_TYPE CONTRACT_PRICE
+:set EXITS_ENSURE_INTERVAL 15    
+:set EXIT_REPLACE_COOLDOWN 30    
+:set EXIT_REPLACE_EPS 0.0        
+
+:set FUNDING_FILTER_THRESHOLD 0.12
+:set CLOSE_BEFORE_FUNDING_MIN 6
+
+:set ADAPTIVE_DCA true
+:set DCA_TREND_ADX 28
+:set DCA_DISABLE_ON_TREND true
+

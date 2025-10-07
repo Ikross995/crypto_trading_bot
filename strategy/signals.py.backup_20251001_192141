@@ -1,0 +1,639 @@
+"""
+Trading signal generation system.
+
+Combines technical indicators, price patterns, and ML predictions
+to generate buy/sell signals with confidence scores.
+"""
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from core.constants import SIGNAL_STRENGTH
+from core.types import Signal, SignalSource, SignalType
+from data.indicators import TechnicalIndicators
+
+# Conditional LSTM import
+try:
+    from models.lstm import LSTMPredictor, TENSORFLOW_AVAILABLE
+    HAS_LSTM = TENSORFLOW_AVAILABLE  # Use TF availability, not just import success
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    HAS_LSTM = False
+
+# Create dummy LSTM predictor when tensorflow not available
+if not HAS_LSTM:
+    class LSTMPredictor:
+        def __init__(self, *args, **kwargs):
+            pass
+        def is_trained(self): 
+            return False
+        def predict(self, *args, **kwargs): 
+            return 0.0, 0.0
+        def predict_next(self, *args, **kwargs):
+            return {"prediction": 0.0, "confidence": 0.0}
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SignalConfig:
+    """Configuration for signal generation."""
+
+    # Technical indicator weights
+    rsi_weight: float = 0.15
+    macd_weight: float = 0.20
+    bb_weight: float = 0.15
+    vwap_weight: float = 0.10
+    adx_weight: float = 0.10
+    supertrend_weight: float = 0.15
+
+    # ML model weight
+    lstm_weight: float = 0.15
+
+    # Signal thresholds
+    strong_signal_threshold: float = 0.7
+    medium_signal_threshold: float = 0.4
+    weak_signal_threshold: float = 0.2
+
+    # RSI levels
+    rsi_oversold: float = 30.0
+    rsi_overbought: float = 70.0
+    rsi_extreme_oversold: float = 20.0
+    rsi_extreme_overbought: float = 80.0
+
+    # ADX trend strength
+    adx_trending_threshold: float = 25.0
+    adx_strong_trend_threshold: float = 40.0
+
+    # Bollinger Band squeeze
+    bb_squeeze_periods: int = 20
+
+    # Volume confirmation
+    volume_confirmation: bool = True
+    volume_threshold: float = 1.5  # Multiplier of average volume
+
+
+class SignalGenerator:
+    """
+    Advanced trading signal generation system.
+
+    Combines multiple signal sources:
+    - Technical indicators (RSI, MACD, Bollinger Bands, etc.)
+    - Price patterns and market structure
+    - Volume analysis
+    - ML model predictions (LSTM)
+    - Market regime detection
+    """
+
+    def __init__(self, config: SignalConfig | None = None):
+        self.config = config or SignalConfig()
+
+        # ML model for predictions
+        self.lstm_model: LSTMPredictor | None = None
+
+        # Signal history for tracking
+        self.signal_history: list[Signal] = []
+
+        # Market regime state
+        self.current_regime = "unknown"
+
+    def set_lstm_model(self, model: LSTMPredictor):
+        """Set LSTM model for ML-based signals."""
+        self.lstm_model = model
+        logger.info("LSTM model set for signal generation")
+
+    def generate_signals(self, df: pd.DataFrame, symbol: str) -> list[Signal]:
+        """
+        Generate trading signals for the given data.
+
+        Args:
+            df: DataFrame with OHLCV data and indicators
+            symbol: Trading symbol
+
+        Returns:
+            List of generated signals
+        """
+        if len(df) < 50:  # Need enough data for indicators
+            logger.warning(f"Insufficient data for signal generation: {len(df)} bars")
+            return []
+
+        signals = []
+
+        # Ensure indicators are calculated
+        if "rsi" not in df.columns:
+            df = TechnicalIndicators.calculate_all_indicators(df)
+
+        # Detect market regime
+        self.current_regime = self._detect_market_regime(df)
+
+        # Generate signals for recent periods
+        lookback = min(20, len(df) - 1)  # Analyze last 20 bars
+
+        for i in range(len(df) - lookback, len(df)):
+            if i < 50:  # Skip early periods with insufficient data
+                continue
+
+            current_data = df.iloc[: i + 1]  # Data up to current bar
+            timestamp = (
+                df.index[i] if hasattr(df.index, "to_pydatetime") else datetime.now()
+            )
+
+            # Generate signal for this timestamp
+            signal = self._generate_signal_for_timestamp(
+                current_data, symbol, timestamp
+            )
+
+            if signal and signal.strength >= self.config.weak_signal_threshold:
+                signals.append(signal)
+
+        # Store in history
+        self.signal_history.extend(signals)
+
+        # Keep only recent signals (last 1000)
+        if len(self.signal_history) > 1000:
+            self.signal_history = self.signal_history[-1000:]
+
+        logger.info(f"Generated {len(signals)} signals for {symbol}")
+        return signals
+
+    def _generate_signal_for_timestamp(
+        self, df: pd.DataFrame, symbol: str, timestamp: datetime
+    ) -> Signal | None:
+        """Generate signal for a specific timestamp."""
+
+        if len(df) < 50:
+            return None
+
+        current_idx = len(df) - 1
+        current_row = df.iloc[current_idx]
+
+        # Initialize signal components
+        signal_components = {}
+        total_score = 0.0
+
+        # 1. RSI signals
+        rsi_signal, rsi_strength = self._analyze_rsi(df, current_idx)
+        signal_components["rsi"] = {"signal": rsi_signal, "strength": rsi_strength}
+        total_score += rsi_signal * self.config.rsi_weight
+
+        # 2. MACD signals
+        macd_signal, macd_strength = self._analyze_macd(df, current_idx)
+        signal_components["macd"] = {"signal": macd_signal, "strength": macd_strength}
+        total_score += macd_signal * self.config.macd_weight
+
+        # 3. Bollinger Bands signals
+        bb_signal, bb_strength = self._analyze_bollinger_bands(df, current_idx)
+        signal_components["bollinger_bands"] = {
+            "signal": bb_signal,
+            "strength": bb_strength,
+        }
+        total_score += bb_signal * self.config.bb_weight
+
+        # 4. VWAP signals
+        vwap_signal, vwap_strength = self._analyze_vwap(df, current_idx)
+        signal_components["vwap"] = {"signal": vwap_signal, "strength": vwap_strength}
+        total_score += vwap_signal * self.config.vwap_weight
+
+        # 5. ADX trend signals
+        adx_signal, adx_strength = self._analyze_adx(df, current_idx)
+        signal_components["adx"] = {"signal": adx_signal, "strength": adx_strength}
+        total_score += adx_signal * self.config.adx_weight
+
+        # 6. SuperTrend signals
+        if "supertrend_direction" in df.columns:
+            st_signal, st_strength = self._analyze_supertrend(df, current_idx)
+            signal_components["supertrend"] = {
+                "signal": st_signal,
+                "strength": st_strength,
+            }
+            total_score += st_signal * self.config.supertrend_weight
+
+        # 7. LSTM model prediction
+        if self.lstm_model:
+            lstm_signal, lstm_strength = self._analyze_lstm_prediction(df, current_idx)
+            signal_components["lstm"] = {
+                "signal": lstm_signal,
+                "strength": lstm_strength,
+            }
+            total_score += lstm_signal * self.config.lstm_weight
+
+        # 8. Volume confirmation
+        volume_confirmed = self._check_volume_confirmation(df, current_idx)
+
+        # Apply volume filter
+        if self.config.volume_confirmation and not volume_confirmed:
+            total_score *= 0.7  # Reduce signal strength without volume confirmation
+
+        # Normalize score to [-1, 1]
+        total_score = np.clip(total_score, -1.0, 1.0)
+
+        # Determine signal type and strength
+        if total_score > self.config.weak_signal_threshold:
+            signal_type = SignalType.BUY
+            strength_category = self._get_strength_category(total_score)
+        elif total_score < -self.config.weak_signal_threshold:
+            signal_type = SignalType.SELL
+            strength_category = self._get_strength_category(abs(total_score))
+        else:
+            return None  # No clear signal
+
+        # Create signal
+        signal = Signal(
+            symbol=symbol,
+            signal_type=signal_type,
+            strength=abs(total_score),
+            source=SignalSource.TECHNICAL,
+            timestamp=timestamp,
+            price=current_row["close"],
+            metadata={
+                "components": signal_components,
+                "regime": self.current_regime,
+                "volume_confirmed": volume_confirmed,
+                "strength_category": strength_category,
+                "score_breakdown": {
+                    "rsi": rsi_signal * self.config.rsi_weight,
+                    "macd": macd_signal * self.config.macd_weight,
+                    "bb": bb_signal * self.config.bb_weight,
+                    "vwap": vwap_signal * self.config.vwap_weight,
+                    "adx": adx_signal * self.config.adx_weight,
+                    "supertrend": (
+                        st_signal * self.config.supertrend_weight
+                        if "supertrend_direction" in df.columns
+                        else 0
+                    ),
+                    "lstm": (
+                        lstm_signal * self.config.lstm_weight if self.lstm_model else 0
+                    ),
+                },
+            },
+        )
+
+        return signal
+
+    def _analyze_rsi(self, df: pd.DataFrame, idx: int) -> tuple[float, float]:
+        """Analyze RSI for signals."""
+        if "rsi" not in df.columns or idx < 1:
+            return 0.0, 0.0
+
+        rsi = df["rsi"].iloc[idx]
+        prev_rsi = df["rsi"].iloc[idx - 1]
+
+        if pd.isna(rsi) or pd.isna(prev_rsi):
+            return 0.0, 0.0
+
+        signal = 0.0
+        strength = 0.0
+
+        # Oversold/Overbought conditions
+        if rsi <= self.config.rsi_extreme_oversold:
+            signal = 1.0  # Strong buy
+            strength = 0.9
+        elif rsi <= self.config.rsi_oversold:
+            signal = 0.6  # Medium buy
+            strength = 0.6
+        elif rsi >= self.config.rsi_extreme_overbought:
+            signal = -1.0  # Strong sell
+            strength = 0.9
+        elif rsi >= self.config.rsi_overbought:
+            signal = -0.6  # Medium sell
+            strength = 0.6
+
+        # Divergence detection (simplified)
+        if idx >= 20:
+            price_trend = df["close"].iloc[idx] > df["close"].iloc[idx - 10]
+            rsi_trend = rsi > df["rsi"].iloc[idx - 10]
+
+            if price_trend != rsi_trend:  # Divergence
+                signal *= 1.2  # Amplify signal
+                strength = min(strength * 1.2, 1.0)
+
+        return signal, strength
+
+    def _analyze_macd(self, df: pd.DataFrame, idx: int) -> tuple[float, float]:
+        """Analyze MACD for signals."""
+        if not all(
+            col in df.columns for col in ["macd", "macd_signal", "macd_histogram"]
+        ):
+            return 0.0, 0.0
+
+        if idx < 1:
+            return 0.0, 0.0
+
+        macd = df["macd"].iloc[idx]
+        macd_signal = df["macd_signal"].iloc[idx]
+        histogram = df["macd_histogram"].iloc[idx]
+        prev_histogram = df["macd_histogram"].iloc[idx - 1]
+
+        if any(pd.isna(x) for x in [macd, macd_signal, histogram, prev_histogram]):
+            return 0.0, 0.0
+
+        signal = 0.0
+        strength = 0.0
+
+        # MACD line cross signal line
+        if macd > macd_signal and prev_histogram <= 0:
+            signal = 0.7  # Bullish crossover
+            strength = 0.7
+        elif macd < macd_signal and prev_histogram >= 0:
+            signal = -0.7  # Bearish crossover
+            strength = 0.7
+
+        # MACD cross zero line
+        if idx >= 2:
+            prev_macd = df["macd"].iloc[idx - 1]
+            if macd > 0 and prev_macd <= 0:
+                signal += 0.3  # Additional bullish signal
+            elif macd < 0 and prev_macd >= 0:
+                signal -= 0.3  # Additional bearish signal
+
+        # Histogram momentum
+        if histogram > prev_histogram > 0:
+            signal += 0.2  # Strengthening uptrend
+        elif histogram < prev_histogram < 0:
+            signal -= 0.2  # Strengthening downtrend
+
+        signal = np.clip(signal, -1.0, 1.0)
+        strength = min(abs(signal), 1.0)
+
+        return signal, strength
+
+    def _analyze_bollinger_bands(
+        self, df: pd.DataFrame, idx: int
+    ) -> tuple[float, float]:
+        """Analyze Bollinger Bands for signals."""
+        required_cols = ["bb_upper", "bb_lower", "bb_middle", "close"]
+        if not all(col in df.columns for col in required_cols):
+            return 0.0, 0.0
+
+        if idx < 1:
+            return 0.0, 0.0
+
+        close = df["close"].iloc[idx]
+        bb_upper = df["bb_upper"].iloc[idx]
+        bb_lower = df["bb_lower"].iloc[idx]
+        bb_middle = df["bb_middle"].iloc[idx]
+
+        if any(pd.isna(x) for x in [close, bb_upper, bb_lower, bb_middle]):
+            return 0.0, 0.0
+
+        signal = 0.0
+        strength = 0.0
+
+        # Band position
+        bb_position = (close - bb_lower) / (bb_upper - bb_lower)
+
+        if bb_position <= 0.05:  # Near lower band
+            signal = 0.8  # Strong buy
+            strength = 0.8
+        elif bb_position >= 0.95:  # Near upper band
+            signal = -0.8  # Strong sell
+            strength = 0.8
+        elif bb_position <= 0.2:
+            signal = 0.4  # Medium buy
+            strength = 0.4
+        elif bb_position >= 0.8:
+            signal = -0.4  # Medium sell
+            strength = 0.4
+
+        # Bollinger squeeze breakout
+        if "bb_squeeze" in df.columns and idx >= 5:
+            was_squeezing = df["bb_squeeze"].iloc[idx - 5 : idx].any()
+            is_squeezing = df["bb_squeeze"].iloc[idx]
+
+            if was_squeezing and not is_squeezing:
+                # Breakout from squeeze
+                if close > bb_middle:
+                    signal += 0.3  # Bullish breakout
+                else:
+                    signal -= 0.3  # Bearish breakout
+
+        signal = np.clip(signal, -1.0, 1.0)
+        strength = min(abs(signal), 1.0)
+
+        return signal, strength
+
+    def _analyze_vwap(self, df: pd.DataFrame, idx: int) -> tuple[float, float]:
+        """Analyze VWAP for signals."""
+        if "vwap" not in df.columns:
+            return 0.0, 0.0
+
+        close = df["close"].iloc[idx]
+        vwap = df["vwap"].iloc[idx]
+
+        if pd.isna(close) or pd.isna(vwap):
+            return 0.0, 0.0
+
+        # Distance from VWAP
+        vwap_distance = (close - vwap) / vwap
+
+        signal = 0.0
+        strength = 0.0
+
+        # Mean reversion signals
+        if vwap_distance > 0.02:  # Price 2% above VWAP
+            signal = -0.4  # Mean reversion sell
+            strength = 0.4
+        elif vwap_distance < -0.02:  # Price 2% below VWAP
+            signal = 0.4  # Mean reversion buy
+            strength = 0.4
+
+        # Trend following signals
+        if idx >= 5:
+            vwap_slope = (vwap - df["vwap"].iloc[idx - 5]) / df["vwap"].iloc[idx - 5]
+
+            if vwap_slope > 0.005 and close > vwap:  # Uptrend
+                signal += 0.3
+            elif vwap_slope < -0.005 and close < vwap:  # Downtrend
+                signal -= 0.3
+
+        signal = np.clip(signal, -1.0, 1.0)
+        strength = min(abs(signal), 1.0)
+
+        return signal, strength
+
+    def _analyze_adx(self, df: pd.DataFrame, idx: int) -> tuple[float, float]:
+        """Analyze ADX for trend strength."""
+        if "adx" not in df.columns:
+            return 0.0, 0.0
+
+        adx = df["adx"].iloc[idx]
+
+        if pd.isna(adx):
+            return 0.0, 0.0
+
+        signal = 0.0
+        strength = 0.0
+
+        # ADX indicates trend strength, not direction
+        # Use with price action to determine signal
+        if adx > self.config.adx_strong_trend_threshold:
+            strength = 0.8  # Strong trend
+        elif adx > self.config.adx_trending_threshold:
+            strength = 0.5  # Moderate trend
+        else:
+            return 0.0, 0.0  # No trend
+
+        # Determine trend direction from price action
+        if idx >= 5:
+            price_trend = df["close"].iloc[idx] > df["close"].iloc[idx - 5]
+            signal = 0.5 if price_trend else -0.5
+
+        return signal, strength
+
+    def _analyze_supertrend(self, df: pd.DataFrame, idx: int) -> tuple[float, float]:
+        """Analyze SuperTrend for signals."""
+        if "supertrend_direction" not in df.columns:
+            return 0.0, 0.0
+
+        if idx < 1:
+            return 0.0, 0.0
+
+        current_trend = df["supertrend_direction"].iloc[idx]
+        prev_trend = df["supertrend_direction"].iloc[idx - 1]
+
+        if pd.isna(current_trend) or pd.isna(prev_trend):
+            return 0.0, 0.0
+
+        signal = 0.0
+        strength = 0.0
+
+        # Trend change signals
+        if current_trend == 1 and prev_trend == -1:
+            signal = 0.8  # Bullish trend change
+            strength = 0.8
+        elif current_trend == -1 and prev_trend == 1:
+            signal = -0.8  # Bearish trend change
+            strength = 0.8
+        elif current_trend == 1:
+            signal = 0.3  # Continue bullish trend
+            strength = 0.3
+        elif current_trend == -1:
+            signal = -0.3  # Continue bearish trend
+            strength = 0.3
+
+        return signal, strength
+
+    def _analyze_lstm_prediction(
+        self, df: pd.DataFrame, idx: int
+    ) -> tuple[float, float]:
+        """Analyze LSTM model prediction for signals."""
+        if not self.lstm_model:
+            return 0.0, 0.0
+
+        try:
+            # Use recent data for prediction
+            recent_data = df.iloc[: idx + 1]
+
+            if len(recent_data) < self.lstm_model.sequence_length:
+                return 0.0, 0.0
+
+            # Get prediction
+            prediction_result = self.lstm_model.predict_next(recent_data)
+            prediction = prediction_result["prediction"]
+            confidence = prediction_result["confidence"]
+
+            # Convert prediction to signal
+            if prediction > 0.01:  # 1% positive change
+                signal = min(prediction * 10, 1.0)  # Scale and cap
+            elif prediction < -0.01:  # 1% negative change
+                signal = max(prediction * 10, -1.0)  # Scale and cap
+            else:
+                signal = 0.0
+
+            strength = min(confidence * 5, 1.0)  # Scale confidence
+
+            return signal, strength
+
+        except Exception as e:
+            logger.warning(f"LSTM prediction error: {e}")
+            return 0.0, 0.0
+
+    def _check_volume_confirmation(self, df: pd.DataFrame, idx: int) -> bool:
+        """Check volume confirmation for signals."""
+        if "volume" not in df.columns or idx < 20:
+            return True  # Default to confirmed if no volume data
+
+        current_volume = df["volume"].iloc[idx]
+        avg_volume = df["volume"].iloc[idx - 20 : idx].mean()
+
+        if pd.isna(current_volume) or pd.isna(avg_volume):
+            return True
+
+        return current_volume >= (avg_volume * self.config.volume_threshold)
+
+    def _detect_market_regime(self, df: pd.DataFrame) -> str:
+        """Detect current market regime."""
+        if len(df) < 50:
+            return "unknown"
+
+        # Use ADX and volatility to determine regime
+        recent_adx = df["adx"].iloc[-20:].mean() if "adx" in df.columns else 15
+        recent_volatility = df["close"].iloc[-20:].std() / df["close"].iloc[-20:].mean()
+
+        if pd.isna(recent_adx) or pd.isna(recent_volatility):
+            return "unknown"
+
+        if recent_adx > 40:
+            return "trending"
+        elif recent_adx < 20:
+            return "ranging"
+        elif recent_volatility > 0.1:
+            return "volatile"
+        else:
+            return "normal"
+
+    def _get_strength_category(self, strength: float) -> str:
+        """Convert strength value to category."""
+        if strength >= self.config.strong_signal_threshold:
+            return SIGNAL_STRENGTH.STRONG
+        elif strength >= self.config.medium_signal_threshold:
+            return SIGNAL_STRENGTH.MEDIUM
+        else:
+            return SIGNAL_STRENGTH.WEAK
+
+    def get_recent_signals(self, symbol: str, limit: int = 10) -> list[Signal]:
+        """Get recent signals for a symbol."""
+        symbol_signals = [s for s in self.signal_history if s.symbol == symbol]
+        return sorted(symbol_signals, key=lambda x: x.timestamp, reverse=True)[:limit]
+
+    def get_signal_summary(self) -> dict[str, Any]:
+        """Get summary of signal generation performance."""
+        if not self.signal_history:
+            return {}
+
+        total_signals = len(self.signal_history)
+        buy_signals = len(
+            [s for s in self.signal_history if s.signal_type == SignalType.BUY]
+        )
+        sell_signals = len(
+            [s for s in self.signal_history if s.signal_type == SignalType.SELL]
+        )
+
+        avg_strength = np.mean([s.strength for s in self.signal_history])
+
+        return {
+            "total_signals": total_signals,
+            "buy_signals": buy_signals,
+            "sell_signals": sell_signals,
+            "buy_ratio": buy_signals / total_signals if total_signals > 0 else 0,
+            "avg_strength": avg_strength,
+            "current_regime": self.current_regime,
+        }
+
+
+    async def initialize(self) -> None:
+        """Initialize signal generator (async compatible)."""
+        logger.info("SignalGenerator initialized")
+
+    async def generate_signal(self, symbol: str) -> Signal | None:
+        """Generate single signal for symbol (async compatible)."""
+        # This is a simplified version - in real implementation you'd fetch current data
+        # For now, return None (no signal)
+        logger.debug(f"Generating signal for {symbol}")
+        return None
+

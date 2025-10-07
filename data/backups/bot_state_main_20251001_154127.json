@@ -1,0 +1,11 @@
+{
+  "timestamp": "2025-10-01T15:18:59.490828",
+  "state_type": "main",
+  "version": "2.0.0",
+  "data": {
+    "processed_signals": [],
+    "timestamp": "2025-10-01T15:18:59.490828",
+    "total_pnl": 0.0,
+    "trades_executed": 0
+  }
+}

@@ -1,0 +1,52 @@
+from __future__ import annotations
+import os
+
+def _truthy(v):
+    if v is None: return None
+    return str(v).strip().lower() in {"1","true","t","yes","y","on"}
+
+def _read_env_file(path: str) -> dict:
+    out = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line=line.strip()
+                if not line or line.startswith("#") or "=" not in line: continue
+                k,v = line.split("=",1)
+                out[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return out
+
+def apply(config):
+    # Базовые переменные окружения
+    et = _truthy(os.getenv("TESTNET"))
+    ed = _truthy(os.getenv("DRY_RUN"))
+    if et is not None:
+        try: config.testnet = bool(et)
+        except Exception: pass
+    if ed is not None:
+        try: config.dry_run = bool(ed)
+        except Exception: pass
+
+    # Путь к .env из CLI/шима
+    cfg_path = os.getenv("IMBA_CONFIG_PATH","")
+    if isinstance(cfg_path, str) and cfg_path:
+        # эвристика по имени файла
+        if cfg_path.lower().endswith(".env.testnet"):
+            try: config.testnet = True
+            except Exception: pass
+            # форсим через окружение для совместимости с клиентом
+            os.environ.setdefault("IMBA_FORCE_TESTNET","1")
+        # Парсим сам файл для TESTNET/DRY_RUN (если переменных в env ещё нет)
+        file_vars = _read_env_file(cfg_path)
+        if et is None and "TESTNET" in file_vars:
+            try: config.testnet = _truthy(file_vars["TESTNET"]) or False
+            except Exception: pass
+            if _truthy(file_vars["TESTNET"]):
+                os.environ.setdefault("IMBA_FORCE_TESTNET","1")
+        if ed is None and "DRY_RUN" in file_vars:
+            try: config.dry_run = _truthy(file_vars["DRY_RUN"]) or False
+            except Exception: pass
+
+    return config
