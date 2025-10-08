@@ -109,8 +109,6 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
-    "--cov=.",
-    "--cov-report=term-missing",
 ]
 filterwarnings = [
     "ignore::UserWarning",

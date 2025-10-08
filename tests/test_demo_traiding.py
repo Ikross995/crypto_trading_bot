@@ -59,8 +59,10 @@ class TestDemoTrading(unittest.TestCase):
         
     def test_signal_generator(self):
         """Test signal generator functionality."""
+        import asyncio
+
         signal_generator = SignalGenerator(self.config)
-        signal_generator.initialize()
+        asyncio.run(signal_generator.initialize())
         
         # Generate market data
         simulator = MarketSimulator(self.config)

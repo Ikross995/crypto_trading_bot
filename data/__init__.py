@@ -1,23 +1,21 @@
-"""
-Data module for AI Trading Bot.
-
-Handles historical data fetching, live market data, technical indicators,
-and feature engineering for ML models.
-"""
+"""Data module for AI Trading Bot."""
 
 from .fetchers import HistoricalDataFetcher, LiveDataFetcher
 from .indicators import TechnicalIndicators
 from .preprocessing import FeatureEngineer
+from .simulator import MarketSimulator, SimulatedMarketData
 
 # Compatibility import (deprecated - use core.constants instead)
 try:
-    from . import constants
-except ImportError:
+    from . import constants  # type: ignore
+except ImportError:  # pragma: no cover
     constants = None
 
 __all__ = [
     "HistoricalDataFetcher",
-    "LiveDataFetcher", 
+    "LiveDataFetcher",
     "TechnicalIndicators",
-    "FeatureEngineer"
+    "FeatureEngineer",
+    "MarketSimulator",
+    "SimulatedMarketData",
 ]
