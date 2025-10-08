@@ -44,10 +44,10 @@ class PaperTradingEngine:
         self.running = False
         self._last_prices: dict = {}
         
-    def start(self) -> None:
+    async def start(self) -> None:
         """Start the paper trading engine."""
         self.logger.info("Starting paper trading engine...")
-        self._initialize_components()
+        await self._initialize_components()
         self.running = True
         self.logger.info("Paper trading engine started")
         
@@ -57,7 +57,7 @@ class PaperTradingEngine:
         self.running = False
         self.logger.info("Paper trading engine stopped")
         
-    def _initialize_components(self) -> None:
+    async def _initialize_components(self) -> None:
         """Initialize all trading components."""
         self.logger.info("Initializing paper trading components...")
         
@@ -93,7 +93,7 @@ class PaperTradingEngine:
                     self.logger.debug(
                         "Awaiting asynchronous initialization for %s", component_name
                     )
-                    asyncio.run(result)
+                    await result
                 self.logger.info(f"{component_name} initialized successfully")
             else:
                 self.logger.exception(f"{component_name} {component.__class__} does not have initialize method!")
@@ -270,7 +270,7 @@ async def run_paper_trading(config: Config = None) -> None:
     
     try:
         # Start the engine
-        engine.start()
+        await engine.start()
         
         # Run the trading loop
         await engine.run_trading_loop()
