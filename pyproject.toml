@@ -114,3 +114,6 @@ filterwarnings = [
     "ignore::UserWarning",
     "ignore::DeprecationWarning",
 ]
+markers = [
+    "asyncio: tests that rely on an asyncio event loop",
+]
