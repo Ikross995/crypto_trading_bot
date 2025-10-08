@@ -212,6 +212,8 @@ class SignalGenerator:
         try:
             # Use recent prices for calculation
             recent_prices = list(prices[-20:]) if len(prices) >= 20 else list(prices)
+            # Ensure numerical values are floats (market data can provide Decimal)
+            recent_prices = [float(p) for p in recent_prices]
             current_timestamp = timestamps[-1] if timestamps and len(timestamps) > 0 else datetime.now()
             
             # Calculate moving averages with real data
@@ -222,6 +224,9 @@ class SignalGenerator:
                 # Use what we have
                 fast_ma = np.mean(recent_prices[-min(self.fast_ma_period, len(recent_prices)):])
                 slow_ma = np.mean(recent_prices)
+
+            fast_ma = float(fast_ma)
+            slow_ma = float(slow_ma) if slow_ma is not None else 0.0
             
             current_price = recent_prices[-1]
             
@@ -238,15 +243,19 @@ class SignalGenerator:
             strength = 0.0
             
             # Calculate MA difference percentage
-            ma_diff_pct = abs(fast_ma - slow_ma) / slow_ma if slow_ma > 0 else 0
-            
+            if slow_ma > 0:
+                ma_diff_pct = abs(fast_ma - slow_ma) / slow_ma
+            else:
+                ma_diff_pct = 0.0
+            ma_diff_pct = float(ma_diff_pct)
+
             if fast_ma > slow_ma:
                 signal_type = SignalType.BUY
-                strength = min(0.9, 0.5 + ma_diff_pct * 100)  # At least 50% strength
-                
+                strength = min(0.9, 0.5 + float(ma_diff_pct) * 100)  # At least 50% strength
+
             elif fast_ma < slow_ma:
-                signal_type = SignalType.SELL  
-                strength = min(0.9, 0.5 + ma_diff_pct * 100)  # At least 50% strength
+                signal_type = SignalType.SELL
+                strength = min(0.9, 0.5 + float(ma_diff_pct) * 100)  # At least 50% strength
             
             # Secondary signal: price momentum with real data
             elif len(recent_prices) >= 2:
@@ -270,7 +279,7 @@ class SignalGenerator:
                     'fast_ma': float(fast_ma),
                     'slow_ma': float(slow_ma),
                     'current_price': float(current_price),
-                    'ma_diff_pct': ma_diff_pct * 100,
+                    'ma_diff_pct': float(ma_diff_pct) * 100,
                     'strategy': 'REAL_MARKET_DATA',
                     'signal_attempt': self.signal_count,
                     'data_points': len(recent_prices)
