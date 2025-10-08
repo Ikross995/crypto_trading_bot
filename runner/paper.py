@@ -83,23 +83,40 @@ class PaperTradingEngine:
             self.position_manager,
             self.signal_generator,
         ]
-        
+
         for component in components:
             component_name = component.__class__.__name__
-            if hasattr(component, 'initialize'):
-                self.logger.info(f"Initializing {component_name}")
-                result = component.initialize()
-                if inspect.isawaitable(result):
-                    self.logger.debug(
-                        "Awaiting asynchronous initialization for %s", component_name
-                    )
-                    await result
-                self.logger.info(f"{component_name} initialized successfully")
-            else:
-                self.logger.exception(f"{component_name} {component.__class__} does not have initialize method!")
-                raise RuntimeError(f"Component {component_name} is missing initialize method")
+            await self._initialize_component(component, component_name)
         
         self.logger.info("All components initialized successfully")
+
+    async def _initialize_component(self, component: Any, component_name: str) -> None:
+        """Initialize a single component, awaiting async hooks when necessary."""
+
+        initializer = getattr(component, "initialize", None)
+        if initializer is None:
+            self.logger.exception(
+                "%s %s does not have initialize method!",
+                component_name,
+                component.__class__,
+            )
+            raise RuntimeError(f"Component {component_name} is missing initialize method")
+
+        self.logger.info("Initializing %s", component_name)
+
+        try:
+            result = initializer()
+        except Exception:
+            self.logger.exception("%s.initialize() raised an exception", component_name)
+            raise
+
+        if inspect.isawaitable(result):
+            self.logger.debug(
+                "Awaiting asynchronous initialization for %s", component_name
+            )
+            await result
+
+        self.logger.info("%s initialized successfully", component_name)
         
     async def run_trading_loop(self) -> None:
         """Main trading loop for paper trading with real market data."""
