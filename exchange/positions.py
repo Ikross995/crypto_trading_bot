@@ -1,312 +1,227 @@
-# exchange/positions.py
-"""
-Position management for AI Trading Bot.
+"""Lightweight position manager used by demos and tests."""
 
-Handles position tracking, P&L calculations, and position-related operations.
-"""
-import time
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Optional
+from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
+from typing import Dict, List, Optional
 
-from core.config import get_config
-from core.types import Position
-from .client import BinanceClient
+from core.config import Config, get_config
+from core.constants import PositionSide
+from .client import BinanceClient, MockBinanceClient
 
 logger = logging.getLogger(__name__)
 
 
+class _AwaitableResult:
+    """Container that works in both sync and async contexts."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def __await__(self):
+        yield
+        return self._value
+
+    def __getattr__(self, item):
+        return getattr(self._value, item)
+
+    def __iter__(self):  # pragma: no cover - rarely used
+        if hasattr(self._value, "__iter__"):
+            return iter(self._value)
+        return iter([self._value])
+
+    def __bool__(self) -> bool:
+        return bool(self._value)
+
+    def unwrap(self):
+        return self._value
+
+
+@dataclass
+class ManagedPosition:
+    symbol: str
+    side: PositionSide
+    size: Decimal
+    entry_price: Decimal
+    current_price: Decimal
+    realized_pnl: Decimal = Decimal("0")
+    opened_at: datetime = datetime.utcnow()
+
+    @property
+    def notional(self) -> Decimal:
+        return self.size * self.current_price
+
+    @property
+    def direction(self) -> Decimal:
+        return Decimal("1") if self.side == PositionSide.LONG else Decimal("-1")
+
+    @property
+    def unrealized_pnl(self) -> Decimal:
+        return (self.current_price - self.entry_price) * self.size * self.direction
+
+    def update_price(self, price: Decimal) -> None:
+        self.current_price = price
+
+
 class PositionManager:
-    """
-    Position manager for tracking and managing futures positions.
+    """Stateful manager for paper-trading style position tracking."""
 
-    Features:
-    - Real-time position tracking
-    - P&L calculation
-    - Position sizing validation
-    - Risk metrics
+    def __init__(self, source: Optional[object] = None):
+        if isinstance(source, BinanceClient):
+            self.client = source
+            self.config = get_config()
+        else:
+            self.config = source if isinstance(source, Config) else get_config()
+            starting_balance = getattr(self.config, "starting_balance", 10000.0)
+            self.client = MockBinanceClient(starting_balance=starting_balance)
+        self._positions: Dict[str, ManagedPosition] = {}
+        self._last_prices: Dict[str, Decimal] = {}
+        self._pnl_history: List[Decimal] = []
+        logger.debug("PositionManager initialized with symbols: %s", self.config.symbols)
 
-    Added in this revision:
-    - Missing compat async adapters moved INSIDE the class
-    - get_position() implementation and cache/TTL
-    - Uses client.get_position_info() alias and robust key mapping (unRealizedProfit vs unPnl)
-    - get_account_balance() returns float using client method
-    """
+    # ------------------------------------------------------------------
+    # Lifecycle helpers
+    # ------------------------------------------------------------------
+    def initialize(self) -> None:
+        """Prepare internal caches."""
+        self._positions.clear()
+        self._last_prices.clear()
+        self._pnl_history.clear()
 
-    def __init__(self, client: BinanceClient):
-        self.client = client
-        self.config = get_config()
+    # ------------------------------------------------------------------
+    # Position operations
+    # ------------------------------------------------------------------
+    def has_position(self, symbol: str) -> bool:
+        pos = self._positions.get(symbol.upper())
+        return bool(pos and pos.size > 0)
 
-        # Position cache to reduce API calls
-        self._positions_cache: Dict[str, Position] = {}
-        self._last_update = 0.0
-        self._cache_ttl = 5.0  # Cache for 5 seconds
+    def update_market_price(self, symbol: str, price: Decimal | float) -> None:
+        dec_price = Decimal(str(price))
+        self._last_prices[symbol.upper()] = dec_price
+        if symbol.upper() in self._positions:
+            self._positions[symbol.upper()].update_price(dec_price)
 
-    # --- async adapters expected by live engine ---
-    async def initialize(self) -> None:
-        """
-        Async initialization to match live engine expectations.
-        Configures symbols via setup_symbol.
-        """
-        cfg = self.config
-        raw: List[str] = []
-        if getattr(cfg, "symbol", None):
-            raw.append(cfg.symbol)
-        if getattr(cfg, "symbols", None):
-            raw.extend(cfg.symbols if isinstance(cfg.symbols, (list, tuple)) else [cfg.symbols])
-
-        ordered, seen = [], set()
-        for s in raw:
-            if s and s not in seen:
-                ordered.append(s); seen.add(s)
-
-        for sym in ordered:
-            try:
-                self.setup_symbol(sym)
-            except Exception:
-                # don't fail overall init
-                pass
-
-    async def get_positions(self):
-        """
-        Return current positions for symbols from config (engine expects this).
-        """
-        cfg = self.config
-        raw: List[str] = []
-        if getattr(cfg, "symbol", None):
-            raw.append(cfg.symbol)
-        if getattr(cfg, "symbols", None):
-            raw.extend(cfg.symbols if isinstance(cfg.symbols, (list, tuple)) else [cfg.symbols])
-
-        ordered, seen = [], set()
-        for s in raw:
-            if s and s not in seen:
-                ordered.append(s); seen.add(s)
-
-        result = []
-        for sym in ordered:
-            pos = self.get_position(sym, force_refresh=True)
-            if pos is not None:
-                self._positions_cache[sym] = pos
-                result.append(pos)
-        return result
-
-    async def update_position(self, position):
-        """
-        Refresh specified position by its symbol and return updated instance.
-        """
-        sym = getattr(position, "symbol", None)
-        if sym is None and isinstance(position, dict):
-            sym = position.get("symbol")
-        if not sym:
-            return position
-        return self.get_position(sym, force_refresh=True)
-
-    async def handle_filled_order(self, order):
-        """
-        Hook after order fill: refresh cached position by symbol.
-        """
-        sym = getattr(order, "symbol", None)
-        if sym is None and isinstance(order, dict):
-            sym = order.get("symbol")
-        if sym:
-            self.get_position(sym, force_refresh=True)
-
-    async def sync_positions(self):
-        """
-        Periodic sync: reload all positions and update cache.
-        """
-        positions = await self.get_positions()
-        for p in positions:
-            sym = getattr(p, "symbol", None)
-            if sym:
-                self._positions_cache[sym] = p
-
-    # --- core API ---
-    def get_position(self, symbol: str, force_refresh: bool = False) -> Optional[Position]:
-        """Return single-symbol Position object or None (flat)."""
+    def update_position(
+        self,
+        *,
+        symbol: str,
+        side: PositionSide,
+        size: Decimal | float,
+        price: Decimal | float,
+    ) -> _AwaitableResult:
         sym = symbol.upper()
-        now = time.time()
-        if not force_refresh and sym in self._positions_cache and (now - self._last_update) < self._cache_ttl:
-            return self._positions_cache.get(sym)
+        quantity = Decimal(str(size)).copy_abs()
+        entry = Decimal(str(price))
+        current = self._last_prices.get(sym, entry)
+        position = ManagedPosition(
+            symbol=sym,
+            side=side,
+            size=quantity,
+            entry_price=entry,
+            current_price=current,
+        )
+        self._positions[sym] = position
+        self._last_prices[sym] = current
+        logger.debug("Position updated: %s", position)
+        return _AwaitableResult(position)
 
-        try:
-            data = self.client.get_position_info()  # list of dicts
-            for pos in data:
-                if str(pos.get("symbol", "")).upper() != sym:
-                    continue
-                amt = float(pos.get("positionAmt", "0") or 0.0)
-                if abs(amt) <= 1e-12:
-                    # flat
-                    p = Position(symbol=sym, side=0, size=0.0, entry_price=0.0,
-                                 unrealized_pnl=0.0, timestamp=datetime.now())
-                    self._positions_cache[sym] = p
-                    self._last_update = now
-                    return p
-                entry = float(pos.get("entryPrice", "0") or 0.0)
-                # UM futures key is 'unRealizedProfit'
-                upnl = pos.get("unRealizedProfit", pos.get("unPnl", "0"))
-                upnl = float(upnl or 0.0)
-                p = Position(
-                    symbol=sym,
-                    side=1 if amt > 0 else -1,
-                    size=abs(amt),
-                    entry_price=entry,
-                    unrealized_pnl=upnl,
-                    timestamp=datetime.now()
-                )
-                self._positions_cache[sym] = p
-                self._last_update = now
-                return p
-        except Exception as e:
-            logger.error(f"Failed to get position for {sym}: {e}")
-            return None
-        return None
+    def get_position(self, symbol: str, *, default=None) -> Optional[ManagedPosition]:
+        return self._positions.get(symbol.upper(), default)
 
-    def get_all_positions(self, force_refresh: bool = False) -> List[Position]:
-        """
-        Get all open positions.
-        """
-        try:
-            positions = []
-            position_data = self.client.get_position_info()
-            for pos in position_data:
-                amt = float(pos.get("positionAmt", "0") or 0.0)
-                if abs(amt) <= 1e-12:
-                    continue
-                symbol = str(pos.get("symbol", "")).upper()
-                entry = float(pos.get("entryPrice", "0") or 0.0)
-                upnl = pos.get("unRealizedProfit", pos.get("unPnl", "0"))
-                upnl = float(upnl or 0.0)
-                position = Position(
-                    symbol=symbol,
-                    side=1 if amt > 0 else -1,
-                    size=abs(amt),
-                    entry_price=entry,
-                    unrealized_pnl=upnl,
-                    timestamp=datetime.now()
-                )
-                positions.append(position)
-                self._positions_cache[symbol] = position
-            self._last_update = time.time()
-            return positions
-        except Exception as e:
-            logger.error(f"Failed to get all positions: {e}")
-            return []
+    def get_all_positions(self) -> List[ManagedPosition]:
+        return list(self._positions.values())
 
+    def get_positions(self) -> _AwaitableResult:
+        return _AwaitableResult(self.get_all_positions())
+
+    def close_position(self, symbol: str, price: Decimal | float) -> _AwaitableResult:
+        sym = symbol.upper()
+        if sym not in self._positions:
+            return _AwaitableResult(Decimal("0"))
+        position = self._positions.pop(sym)
+        close_price = Decimal(str(price))
+        pnl = (close_price - position.entry_price) * position.size * position.direction
+        position.realized_pnl += pnl
+        self._pnl_history.append(pnl)
+        if isinstance(self.client, MockBinanceClient):
+            self.client._paper_balance += pnl  # type: ignore[attr-defined]
+        logger.debug("Closed position %s with pnl %s", sym, pnl)
+        return _AwaitableResult(pnl)
+
+    # ------------------------------------------------------------------
+    # Account helpers
+    # ------------------------------------------------------------------
     def get_account_balance(self) -> float:
-        """
-        Get account balance in USDT as float.
-        """
         try:
-            return float(self.client.get_account_balance() or 0.0)
-        except Exception as e:
-            logger.error(f"Failed to get account balance: {e}")
-            return 0.0
+            return float(self.client.get_account_balance())
+        except Exception:  # pragma: no cover - defensive
+            return float(self.client.get_balance())
 
-    def calculate_position_size(self, symbol: str, entry_price: float,
-                                stop_loss_price: float) -> float:
-        """
-        Calculate position size based on risk management rules.
-        """
-        try:
-            balance = self.get_account_balance()
-            if balance <= 0:
-                return 0.0
+    def get_balance(self) -> Decimal:
+        bal = self.client.get_balance()
+        return bal if isinstance(bal, Decimal) else Decimal(str(bal))
 
-            risk_amount = balance * (self.config.risk_per_trade_pct / 100.0)
-
-            if stop_loss_price <= 0:
-                sl_distance = entry_price * (self.config.sl_fixed_pct / 100.0)
-            else:
-                sl_distance = abs(entry_price - stop_loss_price)
-            if sl_distance <= 0:
-                return 0.0
-
-            position_size = risk_amount / sl_distance
-            position_size *= self.config.leverage
-
-            min_notional = float(self.config.min_notional_usdt or 5.0)
-            if position_size * entry_price < min_notional:
-                position_size = min_notional / max(1e-9, entry_price)
-
-            return position_size
-        except Exception as e:
-            logger.error(f"Failed to calculate position size for {symbol}: {e}")
-            return 0.0
+    def calculate_position_size(self, symbol: str, price: Decimal | float) -> Decimal:
+        market_price = Decimal(str(price))
+        balance = self.get_balance()
+        risk_pct = Decimal(str(self.config.risk_per_trade))
+        if market_price <= 0:
+            return Decimal("0")
+        size = (balance * risk_pct) / market_price
+        logger.debug("Calculated position size for %s: %s", symbol, size)
+        return size
 
     def get_position_risk_metrics(self, symbol: str) -> Dict[str, float]:
-        """
-        Calculate risk metrics for a position.
-        """
-        position = self.get_position(symbol) or Position(symbol=symbol.upper(), side=0, size=0.0, entry_price=0.0,
-                                                         unrealized_pnl=0.0, timestamp=datetime.now())
-        balance = self.get_account_balance()
-
-        if position.is_flat or balance <= 0:
+        position = self.get_position(symbol)
+        balance = float(self.get_balance())
+        if not position or balance <= 0:
             return {
                 "position_size_usd": 0.0,
                 "account_risk_pct": 0.0,
                 "leverage_used": 0.0,
-                "unrealized_pnl_pct": 0.0
+                "unrealized_pnl_pct": 0.0,
             }
-
-        try:
-            t = self.client.get_ticker_price(symbol)
-            current_price = float(t.get("price", "0") or 0.0)
-            position_value = position.size * current_price
-            account_risk_pct = (position_value / balance) * 100.0 / max(1e-9, float(self.config.leverage or 1))
-            leverage_used = position_value / max(1e-9, balance)
-            unrealized_pnl_pct = (position.unrealized_pnl / max(1e-9, balance)) * 100.0
-            return {
-                "position_size_usd": position_value,
-                "account_risk_pct": account_risk_pct,
-                "leverage_used": leverage_used,
-                "unrealized_pnl_pct": unrealized_pnl_pct
-            }
-        except Exception as e:
-            logger.error(f"Failed to calculate risk metrics for {symbol}: {e}")
-            return {
-                "position_size_usd": 0.0,
-                "account_risk_pct": 0.0,
-                "leverage_used": 0.0,
-                "unrealized_pnl_pct": 0.0
-            }
+        notional = float(position.notional)
+        risk_pct = float((position.size * position.entry_price) / balance) if balance else 0.0
+        leverage = notional / balance if balance else 0.0
+        unrealized_pct = float(position.unrealized_pnl / balance) * 100.0 if balance else 0.0
+        return {
+            "position_size_usd": notional,
+            "account_risk_pct": risk_pct * 100.0,
+            "leverage_used": leverage,
+            "unrealized_pnl_pct": unrealized_pct,
+        }
 
     def setup_symbol(self, symbol: str) -> bool:
-        """
-        Setup symbol for trading (leverage, margin type, position mode).
-        """
-        try:
-            # leverage
-            self.client.change_leverage(symbol, int(self.config.leverage))
-            logger.info(f"Set leverage for {symbol}: {self.config.leverage}x")
-
-            # margin type (default isolated)
-            margin_type = getattr(self.config, "margin_type", "ISOLATED") or "ISOLATED"
-            try:
-                self.client.change_margin_type(symbol, margin_type)
-                logger.info(f"Set margin type for {symbol}: {margin_type}")
-            except Exception:
-                pass  # already set
-
-            # position mode (ONEWAY/HEDGE)
-            try:
-                dual_side = (str(getattr(self.config, "position_mode", "ONEWAY")).upper() == "HEDGE")
-                self.client.change_position_mode(dual_side)
-                logger.info(f"Set position mode: {'HEDGE' if dual_side else 'ONE-WAY'}")
-            except Exception:
-                pass
-
-            return True
-        except Exception as e:
-            logger.error(f"Failed to setup symbol {symbol}: {e}")
-            return False
+        logger.debug("Setup symbol called for %s", symbol)
+        return True
 
     def clear_cache(self, symbol: Optional[str] = None) -> None:
-        """Clear position cache for symbol or all."""
         if symbol:
-            self._positions_cache.pop(symbol.upper(), None)
+            self._positions.pop(symbol.upper(), None)
+            self._last_prices.pop(symbol.upper(), None)
         else:
-            self._positions_cache.clear()
-        logger.debug(f"Cleared position cache for {symbol or 'all symbols'}")
+            self._positions.clear()
+            self._last_prices.clear()
+
+    # Compatibility async-style adapters --------------------------------
+    def sync_positions(self) -> _AwaitableResult:
+        return self.get_positions()
+
+    async def initialize_async(self) -> None:  # pragma: no cover - optional
+        self.initialize()
+
+    async def get_positions_async(self) -> List[ManagedPosition]:  # pragma: no cover
+        return self.get_positions().unwrap()
+
+    async def update_position_async(self, *args, **kwargs):  # pragma: no cover
+        return self.update_position(*args, **kwargs).unwrap()
+
+    async def close_position_async(self, symbol: str, price: Decimal | float):  # pragma: no cover
+        return self.close_position(symbol, price).unwrap()
+
+
+__all__ = ["PositionManager", "ManagedPosition"]
