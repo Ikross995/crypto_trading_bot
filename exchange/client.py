@@ -39,12 +39,15 @@ import hmac
 import logging
 import os
 import time
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional, List
 
 import requests
 
 from core.config import get_config
 from core.constants import TradingMode
+from data.simulator import MarketSimulator, SimulatedMarketData
 
 logger = logging.getLogger(__name__)
 
@@ -252,17 +255,29 @@ class BinanceClient:
         """
         params = {k: v for k, v in order_params.items() if v is not None}
         symbol = (params.get("symbol") or "").upper()
+        order_type = params.get("type")
+        if order_type is None and "order_type" in params:
+            order_type = params["order_type"]
+            params.setdefault("type", order_type)
+        if hasattr(order_type, "value"):
+            order_type_str = str(order_type.value).upper()
+        elif order_type is None:
+            order_type_str = ""
+        else:
+            order_type_str = str(order_type).upper()
         if self.dry_run or not self.api_key or not self.api_secret:
             # simulate acknowledgment
             return {
                 "symbol": symbol,
-                "status": "FILLED" if params.get("type") == "MARKET" else "NEW",
+                "orderId": int(time.time() * 1000),
+                "clientOrderId": f"SIM-{int(time.time() * 1000)}",
+                "status": "FILLED" if order_type_str == "MARKET" else "NEW",
                 "type": params.get("type"),
                 "side": params.get("side"),
                 "price": params.get("price"),
                 "stopPrice": params.get("stopPrice"),
                 "origQty": params.get("quantity"),
-                "executedQty": params.get("quantity") if params.get("type") == "MARKET" else "0",
+                "executedQty": params.get("quantity") if order_type_str == "MARKET" else "0",
                 "reduceOnly": params.get("reduceOnly", False),
                 "closePosition": params.get("closePosition", False),
             }
@@ -439,32 +454,120 @@ class BinanceClient:
 
 # --- Lightweight compat shells expected by other parts of the project ---
 class BinanceMarketDataClient:
-    """Thin wrapper around BinanceClient exposing only market-data style helpers."""
+    """Market-data facade with offline simulator fallback."""
 
     def __init__(self, config=None, underlying: Optional[BinanceClient] = None) -> None:
         self._cfg = config or get_config()
         self._api = underlying or BinanceClient(testnet=self._cfg.testnet)
+        self.simulator: Optional[MarketSimulator] = None
+        self._use_simulator: bool = False
 
     def initialize(self) -> None:
-        # no-op, kept for API compatibility with older engines
-        return None
+        symbol = getattr(self._cfg, "symbol", "BTCUSDT")
+        try:
+            price = self._api.get_current_price(symbol)
+        except Exception:
+            price = 0.0
+        if price and price > 0:
+            self._use_simulator = False
+            self.simulator = None
+        else:
+            self._activate_simulator()
+
+    def _activate_simulator(self) -> MarketSimulator:
+        if self.simulator is None:
+            self.simulator = MarketSimulator(self._cfg)
+            self.simulator.initialize()
+        self._use_simulator = True
+        return self.simulator
+
+    def _build_market_data(
+        self, symbol: str, interval: str, rows: List[List[Any]]
+    ) -> SimulatedMarketData:
+        timestamps: List[datetime] = []
+        opens: List[Decimal] = []
+        highs: List[Decimal] = []
+        lows: List[Decimal] = []
+        closes: List[Decimal] = []
+        volumes: List[Decimal] = []
+
+        for row in rows:
+            if len(row) < 6:
+                continue
+            try:
+                ts_ms, o, h, l, c, v = row[:6]
+                timestamps.append(datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc))
+                opens.append(Decimal(str(o)).quantize(Decimal("0.0001")))
+                highs.append(Decimal(str(h)).quantize(Decimal("0.0001")))
+                lows.append(Decimal(str(l)).quantize(Decimal("0.0001")))
+                closes.append(Decimal(str(c)).quantize(Decimal("0.0001")))
+                volumes.append(Decimal(str(v)).quantize(Decimal("0.0001")))
+            except Exception:
+                continue
+
+        if not timestamps:
+            raise ValueError("No valid kline rows")
+
+        return SimulatedMarketData(
+            symbol=symbol.upper(),
+            interval=interval,
+            timestamp=timestamps,
+            open=opens,
+            high=highs,
+            low=lows,
+            close=closes,
+            volume=volumes,
+        )
 
     # Compat methods used by runner.paper/SignalGenerator
-    def get_current_price(self, symbol: str) -> float:
-        return self._api.get_current_price(symbol)
+    def get_current_price(self, symbol: str) -> Decimal:
+        if self._use_simulator and self.simulator is not None:
+            return self.simulator.get_current_price(symbol)
 
-    def get_klines(self, symbol: str, interval: str = "1m", limit: int = 500) -> List[list]:
-        return self._api.get_klines(symbol, interval=interval, limit=limit)
+        try:
+            price = self._api.get_current_price(symbol)
+        except Exception:
+            price = 0.0
+
+        if not price or price <= 0:
+            simulator = self._activate_simulator()
+            return simulator.get_current_price(symbol)
+
+        return Decimal(str(price)).quantize(Decimal("0.01"))
+
+    def get_klines(self, symbol: str, interval: str = "1m", limit: int = 500) -> SimulatedMarketData:
+        if self._use_simulator and self.simulator is not None:
+            return self.simulator.get_klines(symbol, interval=interval, limit=limit)
+
+        try:
+            rows = self._api.get_klines(symbol, interval=interval, limit=limit)
+            if not rows:
+                raise ValueError("Empty kline data")
+            return self._build_market_data(symbol, interval, rows)
+        except Exception:
+            simulator = self._activate_simulator()
+            return simulator.get_klines(symbol, interval=interval, limit=limit)
 
 
 class MockBinanceClient(BinanceClient):
     """Mock client that behaves like dry-run regardless of keys; useful for paper tests."""
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        starting_balance = kwargs.pop("starting_balance", None)
+        args_list = list(args)
+        if args_list:
+            starting_balance = args_list.pop(0) if starting_balance is None else starting_balance
+        super().__init__(*args_list, **kwargs)
         self.dry_run = True
         self.api_key = ""
         self.api_secret = ""
+        self._paper_balance = Decimal(str(starting_balance if starting_balance is not None else 10000.0))
+
+    def get_account_balance(self) -> float:
+        return float(self._paper_balance)
+
+    def get_balance(self) -> Decimal:
+        return self._paper_balance
 
 
 # Some code expects this alias

@@ -12,6 +12,7 @@ Simulates trading with real market data but fake money.
 """
 
 import asyncio
+import inspect
 import logging
 from typing import List, Any
 from decimal import Decimal
@@ -87,7 +88,12 @@ class PaperTradingEngine:
             component_name = component.__class__.__name__
             if hasattr(component, 'initialize'):
                 self.logger.info(f"Initializing {component_name}")
-                component.initialize()
+                result = component.initialize()
+                if inspect.isawaitable(result):
+                    self.logger.debug(
+                        "Awaiting asynchronous initialization for %s", component_name
+                    )
+                    asyncio.run(result)
                 self.logger.info(f"{component_name} initialized successfully")
             else:
                 self.logger.exception(f"{component_name} {component.__class__} does not have initialize method!")
