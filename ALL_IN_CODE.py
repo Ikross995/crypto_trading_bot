@@ -12,7 +12,7 @@ crypto_trading_bot/
 ├── cli.py                  # CLI интерфейс  
 ├── core/
 │   ├── __init__.py
-│   ├── config.py           # Управление конфигурацией
+│   ├── config.py           
 │   ├── constants.py        # Константы
 │   ├── types.py           # Типы данных  
 │   └── utils.py           # Утилиты
